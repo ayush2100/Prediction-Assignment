@@ -1,0 +1,150 @@
+
+---
+title: "Prediction Assignment Writeup"
+author: "Student"
+date: "2026-10-12"
+output:
+  html_document:
+    toc: true
+---
+
+## 1. Introduction
+
+The goal of this project is to predict the manner in which participants perform barbell-lifting exercises using data collected from accelerometers. The response variable is `classe`, which contains five categories: A, B, C, D, and E.
+
+## 2. Data Preparation
+
+```{r setup, message=FALSE, warning=FALSE}
+library(caret)
+library(randomForest)
+
+set.seed(2026)
+
+train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(train_url, na.strings = c("", "NA", "#DIV/0!"))
+testing  <- read.csv(test_url, na.strings = c("", "NA", "#DIV/0!"))
+
+# Remove identifiers, timestamps, and administrative columns.
+remove_cols <- c(
+  "X", "user_name", "raw_timestamp_part_1",
+  "raw_timestamp_part_2", "cvtd_timestamp",
+  "new_window", "num_window"
+)
+
+training <- training[, !(names(training) %in% remove_cols)]
+testing  <- testing[, !(names(testing) %in% remove_cols)]
+
+# Retain predictors that have usable numeric values.
+predictors <- setdiff(names(training), "classe")
+numeric_predictors <- predictors[
+  sapply(training[predictors], is.numeric)
+]
+
+# Drop predictors with substantial missing data.
+usable <- numeric_predictors[
+  sapply(training[numeric_predictors],
+         function(x) mean(!is.na(x)) > 0.95)
+]
+
+# Impute any remaining missing values using training medians.
+for (nm in usable) {
+  med <- median(training[[nm]], na.rm = TRUE)
+  training[[nm]][is.na(training[[nm]])] <- med
+  testing[[nm]][is.na(testing[[nm]])] <- med
+}
+
+model_data <- training[, c(usable, "classe")]
+test_data <- testing[, usable]
+model_data$classe <- factor(model_data$classe)
+
+cat("Training rows:", nrow(model_data), "\n")
+cat("Test rows:", nrow(test_data), "\n")
+cat("Predictor count:", length(usable), "\n")
+```
+
+## 3. Model Selection and Validation
+
+Random Forest was selected because it can learn nonlinear relationships and interactions among predictors. A validation partition is kept separate from the model-fitting data to estimate performance on unseen observations.
+
+```{r model, message=FALSE, warning=FALSE}
+set.seed(2026)
+
+split <- createDataPartition(
+  model_data$classe,
+  p = 0.75,
+  list = FALSE
+)
+
+fit_train <- model_data[split, ]
+fit_valid <- model_data[-split, ]
+
+# A compact model to reduce runtime in the lab sandbox.
+rf_model <- randomForest(
+  classe ~ .,
+  data = fit_train,
+  ntree = 50,
+  mtry = max(1, floor(sqrt(ncol(fit_train) - 1)))
+)
+
+valid_pred <- predict(rf_model, newdata = fit_valid)
+
+validation_results <- confusionMatrix(
+  valid_pred,
+  fit_valid$classe
+)
+
+validation_results
+```
+
+## 4. Expected Out-of-Sample Error
+
+Validation accuracy measures the proportion of held-out observations classified correctly. The estimated out-of-sample error is one minus that accuracy. This is an estimate rather than a guarantee of performance on future observations.
+
+```{r evaluation}
+validation_accuracy <- as.numeric(
+  validation_results$overall["Accuracy"]
+)
+
+validation_error <- 1 - validation_accuracy
+
+cat(
+  "Validation accuracy:",
+  round(validation_accuracy, 4), "\n"
+)
+
+cat(
+  "Estimated out-of-sample error:",
+  round(validation_error, 4), "\n"
+)
+
+cat(
+  "Validation observations:",
+  nrow(fit_valid), "\n"
+)
+```
+
+## 5. Final Model and Test Predictions
+
+After validation, a final Random Forest model is fitted using all labeled training observations. It is then used to predict the exercise-performance class for each of the 20 test observations.
+
+```{r final-model, message=FALSE, warning=FALSE}
+set.seed(2026)
+
+final_model <- randomForest(
+  classe ~ .,
+  data = model_data,
+  ntree = 50,
+  mtry = max(1, floor(sqrt(ncol(model_data) - 1)))
+)
+
+predictions <- predict(final_model, newdata = test_data)
+
+cat("Number of predictions:", length(predictions), "\n")
+print(predictions)
+```
+
+## 6. Conclusion
+
+Random Forest provides a flexible classification approach for accelerometer data. The validation partition provides an estimate of out-of-sample error, while the final model uses the full labeled training dataset to predict the 20 test cases. The validation results should be considered an estimate of future predictive performance, not a guarantee.
